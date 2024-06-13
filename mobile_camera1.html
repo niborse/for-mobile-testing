@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Point of Sale System</title>
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            overflow: hidden;
+        }
+        body.loading:before {
+            content: "Start scanning your items...";
+            color: white;
+            text-align: left;
+            padding-left: 10px;
+            width: 50%;
+            position: absolute;
+            top: 20px;
+            font-size: 3em;
+            font-weight: bold;
+            z-index: 100;
+        }
+        .container {
+            display: flex;
+            height: 100%;
+        }
+        .camera-window {
+            flex: 1;
+            background-color: #222;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+            width: 50%;
+        }
+        .camera-window video {
+            width: 100%;
+            height: auto;
+        }
+        .camera-window canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+        .pos-system {
+            width: 50%;
+            background-color: rgba(85, 61, 61, 1);
+            color: white;
+            padding: 20px;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+        }
+        .pos-system h2 {
+            margin-top: 0;
+        }
+        #posItemsList {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            padding-left: 20px;
+        }
+        #posItemsList > div {
+            margin-bottom: 5px;
+            display: flex;
+            justify-content: space-between;
+            width: 100%;
+        }
+        #posItemsList > div > span {
+            margin-left: auto;
+        }
+        .quantity-controls {
+            display: flex;
+            align-items: center;
+        }
+        .quantity-controls button {
+            margin: 0 5px;
+        }
+        .payment-methods {
+            margin-top: auto;
+            display: flex;
+            justify-content: center;
+        }
+        .payment-methods button {
+            margin-right: 10px;
+            padding: 10px 20px;
+            font-size: 16px;
+        }
+        .total-amount {
+            margin-top: auto;
+            margin-left: 20px;
+        }
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            width: 300px;
+            background-color: #fefefe;
+            padding: 20px;
+            border: 1px solid #888;
+        }
+        .close {
+            color: #aaa;
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+        }
+        .close:hover,
+        .close:focus {
+            color: black;
+            text-decoration: none;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body class="loading">
+    <div class="container">
+        <div class="camera-window">
+            <video id="video" autoplay muted playsinline></video>
+            <canvas id="canvas"></canvas>
+        </div>
+        <div class="pos-system">
+            <h2>Point of Sale System</h2>
+            <ul id="detectedItems"></ul>
+            <div id="posItemsList"></div>
+            <button id="sendToComputerButton">Send to Computer POS System</button>
+            <button onclick="clearPOS()">New Customer</button>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.5.1/jquery.min.js"
+        integrity="sha512-bLT0Qm9VnAYZDflyKcBaQ2gg0hSYNQrJ8RilYldYQ1FxQYoCLtUjuuRuZo+fjqhx/qtq/1itJ0C2ejDxltZVFg=="
+        crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/lodash.js/4.17.20/lodash.min.js"
+        integrity="sha512-90vH1Z83AJY9DmlWa8WkjkV79yfS2n2Oxhsi2dZbIv0nC4E6m5AbH8Nh156kkM7JePmqD6tcZsfad1ueoaovww=="
+        crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/async/3.2.0/async.min.js"
+        integrity="sha512-6K6+H87tLdCWvY5ml9ZQXLRlPlDEt8uXmtELhuJRgFyEDv6JvndWHg3jadJuBVGPEhhA2AAt+ROMC2V7EvTIWw=="
+        crossorigin="anonymous"></script>
+    <script src="https://cdn.roboflow.com/0.2.26/roboflow.js"></script>
+    
+    <script>
+        let video, canvas, ctx, detectedItemsList, posItemsList;
+        let posItems = [];
+        let pricesDisplayed = false;
+        let model = null;
+        
+
+        function initializeApp() {
+            video = document.getElementById('video');
+            canvas = document.getElementById('canvas');
+            ctx = canvas.getContext('2d');
+            detectedItemsList = document.getElementById('detectedItems');
+            posItemsList = document.getElementById('posItemsList');
+            video.addEventListener('loadedmetadata', startApp);
+            startCamera();
+        }
+        function startApp() {
+            loadModel();
+            resizeCanvas();
+            detectFrame();
+        }
+
+
+        function loadModel() {
+            const publishable_key = "rf_641cM6HVqqcEHzEYO7o9rvQdxBI3";
+            const toLoad = { model: "groceries-items", version: 1 };
+            roboflow.auth({ publishable_key })
+                .load(toLoad)
+                .then(m => {
+                    model = m;
+                    document.body.classList.remove('loading');
+                    
+                })
+                .catch(error => {
+                    console.error('Error loading model:', error);
+                });
+        }
+
+        function startCamera() {
+            navigator.mediaDevices.getUserMedia({ video: true })
+                .then(stream => {
+                    video.srcObject = stream;
+                    video.onloadedmetadata = () => {
+                        video.play();
+                    };
+                    document.getElementById('sendToComputerButton').addEventListener('click', sendToComputer);
+                })
+                .catch(error => {
+                    console.error('Error accessing camera:', error);
+                });
+        }
+
+        function resizeCanvas() {
+            const { videoWidth, videoHeight } = video;
+            canvas.width = videoWidth;
+            canvas.height = videoHeight;
+        }
+
+        async function detectFrame() {
+            if (!model) return requestAnimationFrame(detectFrame);
+
+            const predictions = await model.detect(video);
+            renderPredictions(predictions);
+            storeInPOS(predictions); // Store detected items in POS
+            updatePosItemsList(); // Update the list of detected items on the screen
+
+            
+
+            requestAnimationFrame(detectFrame);
+        }
+        function renderPredictions(predictions) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            detectedItemsList.innerHTML = '';
+            predictions.forEach(prediction => {
+                const { class: itemClass, bbox, color } = prediction;
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 4;
+                ctx.strokeRect(bbox[0], bbox[1], bbox[2], bbox[3]);
+
+                const listItem = document.createElement('li');
+                listItem.textContent = itemClass;
+                detectedItemsList.appendChild(listItem);
+            });
+        }
+
+        function getItemPrice(itemClass) {
+            const prices = {
+                "Apple-Royal-Gala": 2.5,
+                "Banana": 1.5,
+                "Bread-Hovis": 1,
+                "Bread-Warburtons": 1.2,
+                "Melon": 1.2,
+                "Milk-Arla-gravendale-whole-milk": 2.45,
+                "Milkybar": 0.3,
+                "Walkers-Salt-and-Vinegar": 1.5,
+                "orange": 2.3
+            };
+            return prices[itemClass] || 0;
+        }
+
+        function storeInPOS(predictions) {
+            predictions.forEach(prediction => {
+                if (!posItems.some(item => item.class === prediction.class)) {
+                    posItems.push({
+                        class: prediction.class,
+                        price: getItemPrice(prediction.class),
+                        quantity: 1
+                    });
+                }
+            });
+            updatePosItemsList();
+        }
+
+        function updatePosItemsList() {
+            posItemsList.innerHTML = '';
+            posItems.forEach(item => {
+                const listItem = document.createElement('div');
+                listItem.textContent = `${item.class} - $${(item.price * item.quantity).toFixed(2)}`;
+                posItemsList.appendChild(listItem);
+
+                const quantityControls = document.createElement('div');
+                quantityControls.classList.add('quantity-controls');
+
+                const increaseButton = document.createElement('button');
+                increaseButton.textContent = '+';
+                increaseButton.addEventListener('click', function() {
+                    increaseQuantity(item.class);
+                });
+
+                const decreaseButton = document.createElement('button');
+                decreaseButton.textContent = '-';
+                decreaseButton.addEventListener('click', function() {
+                    decreaseQuantity(item.class);
+                });
+
+                const removeButton = document.createElement('button');
+                removeButton.textContent = 'x';
+                removeButton.addEventListener('click', function() {
+                    removeItem(item.class);
+                });
+
+                const quantityDisplay = document.createElement('span');
+                quantityDisplay.textContent = item.quantity;
+
+                quantityControls.appendChild(decreaseButton);
+                quantityControls.appendChild(quantityDisplay);
+                quantityControls.appendChild(increaseButton);
+                quantityControls.appendChild(removeButton);
+
+                posItemsList.appendChild(quantityControls);
+            });
+        }
+
+        function increaseQuantity(itemClass) {
+            const item = posItems.find(item => item.class === itemClass);
+            if (item) {
+                item.quantity++;
+                updatePosItemsList();
+            }
+        }
+
+        function decreaseQuantity(itemClass) {
+            const item = posItems.find(item => item.class === itemClass);
+            if (item && item.quantity > 1) {
+                item.quantity--;
+                updatePosItemsList();
+            }
+        }
+
+        function removeItem(itemClass) {
+            posItems = posItems.filter(item => item.class !== itemClass);
+            updatePosItemsList();
+        }
+        function sendToComputer() {
+            const serverURL = 'http://192.168.0.101:8080/receive_items';
+
+            fetch(serverURL, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ items: posItems })
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Failed to send items.');
+                }
+                console.log('Items sent successfully.');
+            })
+            .catch(error => {
+                console.error('Error sending items:', error);
+                alert('Failed to send items to computer. Check console for details.');
+            });
+        }
+
+
+
+
+
+        function clearPOS() {
+            posItems = [];
+            updatePosItemsList();
+        }
+        
+
+        document.addEventListener('DOMContentLoaded', initializeApp);
+    </script>
+</body>
+</html>
